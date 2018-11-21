@@ -1,3 +1,4 @@
+import itertools
 from collections import OrderedDict
 
 
@@ -24,15 +25,15 @@ class Plate:
         # Fill plate with data from plate_file
         self._fill_plate()
 
+        # Remove empty rows/columns/wells
+        self._clean_plate()
+
         self.samples = self._get_samples()
         self.targets = self._get_targets()
 
         self.unique_pipetting_groups = self._get_unique_pipetting_groups()
 
         self._assign_pipetting_groups_to_columns()
-
-        for g in self.unique_pipetting_groups:
-            print(g)
 
     def __str__(self):
         r = ''
@@ -105,9 +106,10 @@ class Plate:
         with open(self.plate_file, 'r') as f:
             for line in f.read().splitlines():
                 self.plate_file_list.append(line.split(','))
+
+        # Find indexes of each column of interest
         self.header = self.plate_file_list[0]
         self.plate_file_wells = self.plate_file_list[1:]
-        # Find indexes of each column of interest
         for i, h in enumerate(self.header):
             if h == 'Row':
                 row_index = i
@@ -123,6 +125,7 @@ class Plate:
                 sample_name_index = i
             elif h == 'Starting Quantity':
                 starting_quantity_index = i
+
         # Set proper types to data coming from plate_file then update wells with each entry
         for w in self.plate_file_wells:
             row = w[row_index]
@@ -254,8 +257,8 @@ class Plate:
         return distinct_groups, non_distinct_groups
 
     def _is_distinct_from_groups(self, group, list_of_groups):
-        for comparitor_group in list_of_groups:
-            if not self._is_distinct(group, comparitor_group):
+        for comparator_group in list_of_groups:
+            if not self._is_distinct(group, comparator_group):
                 return False
         return True
 
@@ -269,7 +272,17 @@ class Plate:
 
     def _assign_pipetting_groups_to_columns(self):
         for col in self.columns():
-            pass
+            col.match_sample_pipetting_groups(self.unique_pipetting_groups)
+
+    def _clean_plate(self):
+        self._rows = [row for row in self._rows if not row.isempty()]
+        self._columns = [col for col in self._columns if not col.isempty()]
+
+        for row in self._rows:
+            row.remove_empty_wells()
+
+        for col in self._columns:
+            col.remove_empty_wells()
 
 
 class Well:
@@ -298,70 +311,76 @@ class Well:
         return hash((self.target_name, self.sample_name, self.starting_quantity))
 
     def __eq__(self, other):
-        return (self.sample_name == other.sample_name and
-                self.sample_type == other.sample_type and
-                self.target_name == other.target_name and
-                self.starting_quantity == other.starting_quantity)
+        if isinstance(other, Sample):
+            return (self.sample_name == other.sample_name and
+                    self.starting_quantity == other.starting_quantity)
+        elif isinstance(other, Well):
+            return (self.sample_name == other.sample_name and
+                    self.target_name == other.target_name and
+                    self.starting_quantity == other.starting_quantity)
 
     def isempty(self):
         return all([x is None for x in [self.sample_type, self.replicate_num, self.target_name, self.sample_name, self.starting_quantity]])
 
 
-class Reaction:
-    def __init__(self, target_name, sample_name, starting_quantity):
-        self.target_name = target_name
+class Sample:
+    def __init__(self, sample_name, starting_quantity):
         self.sample_name = sample_name
         self.starting_quantity = starting_quantity
 
     def __str__(self):
-        return 'Reaction:{}-{}-{}'.format(self.target_name, self.sample_name, self.starting_quantity)
+        return '{}:{}-{}'.format(self.__class__.__name__, self.sample_name, self.starting_quantity)
 
     def __repr__(self):
-        return '{}({}, {}, {})'.format(self.__class__.__name__, self.target_name, self.sample_name, self.starting_quantity)
+        return '{}({}, {})'.format(self.__class__.__name__, self.sample_name, self.starting_quantity)
 
     def __hash__(self):
-        return hash((self.target_name, self.sample_name, self.starting_quantity))
+        return hash((self.sample_name, self.starting_quantity))
 
     def __eq__(self, other):
-        return (self.target_name == other.target_name and
-                self.sample_name == other.sample_name and
+        return (self.sample_name == other.sample_name and
                 self.starting_quantity == other.starting_quantity)
 
+
 class PipettingGroup:
-    def __init__(self, reactions):
-        if all(isinstance(r, Reaction) for r in reactions):
-            self.reactions = reactions
-        if all(isinstance(r, Well) for r in reactions):
-            self.reactions = [Reaction(r.target_name, r.sample_name, r.starting_quantity) for r in reactions]
-
+    def __init__(self, samples):
+        if all(isinstance(r, Sample) for r in samples):
+            self.samples = samples
+        if all(isinstance(r, Well) for r in samples):
+            self.samples = [Sample(r.sample_name, r.starting_quantity) for r in samples]
         self.index = 0
-
-        # if all(isinstance(well, tuple) for well in wells):
-        #     self.wells = [(well[0], well[1], well[2], well[3]) for well in wells]
-        # else:
-        #     self.wells = [(well.sample_name, well.sample_type, well.target_name, well.starting_quantity) for well in wells if not well.isempty()]
-        # self.index = 0
 
     def __eq__(self, other):
         if len(self) != len(other):
             return False
-        return all([x == y for x, y in zip(self.reactions, other.reactions)])
+        if isinstance(other, PipettingGroup):
+            return all([x == y for x, y in zip(self.samples, other.samples)])
+        elif isinstance(other, WellSeries):
+            return all([x == y for x, y in zip(self.samples, other.wells)])
+        else:
+            raise TypeError("{} is not a PipettingGroup or WellSeries".format(type(other)))
 
     def __str__(self):
-        s = 'PipettingGroup:'
-        for r in self.reactions:
+        s = '{}:'.format(self.__class__.__name__)
+        for r in self.samples:
             s += str(r) + ', '
         return s[:-2]
 
+    def __repr__(self):
+        sample_str = ''
+        for s in self.samples:
+            sample_str += repr(s) + ', '
+        return '{}([{}])'.format(self.__class__.__name__, sample_str[:-2])
+
     def __len__(self):
-        return len(self.reactions)
+        return len(self.samples)
 
     def __iter__(self):
         return self
 
     def __next__(self):
         try:
-            result = self.reactions[self.index]
+            result = self.samples[self.index]
         except IndexError:
             self.index = 0
             raise StopIteration
@@ -369,28 +388,32 @@ class PipettingGroup:
         return result
 
     def __getitem__(self, item):
-        return self.reactions[item]
+        return self.samples[item]
 
     def __hash__(self):
-        return hash(tuple(self.reactions))
+        return hash(tuple(self.samples))
 
     def __contains__(self, item):
-        if isinstance(item, Reaction):
-            return True if item in self.reactions else False
+        if isinstance(item, Sample):
+            return True if item in self.samples else False
 
         if isinstance(item, Well):
-            return True if Reaction(item) in self.reactions else False
+            return True if Sample(item) in self.samples else False
 
         # Sliding window comparison
         for i in range(0, len(self)-len(item)+1):
-            if self.reactions[i:i+len(item)] == item:
+            if self.samples[i:i + len(item)] == item:
                 return True
         return False
+
+    def __add__(self, other):
+        return PipettingGroup(self.samples + other.samples)
 
 
 class WellSeries:
     def __init__(self, wells=None):
         self.wells = []
+        self.sample_pipetting_groups = []
         self.index = 0
         if wells is None:
             self.label = None
@@ -424,8 +447,12 @@ class WellSeries:
     def __eq__(self, other):
         if len(self) != len(other):
             return False
+        if isinstance(other, WellSeries):
+            return all([x == y for x, y in zip(self.wells, other.wells)])
+        elif isinstance(other, PipettingGroup):
+            return all([x == y for x, y in zip(self.wells, other.samples)])
         else:
-            return all([x == y for x, y in zip(self, other)])
+            raise TypeError("{} is not a PipettingGroup or WellSeries".format(type(other)))
 
     def __hash__(self):
         return hash(tuple(self.wells))
@@ -443,6 +470,9 @@ class WellSeries:
             if not well.isempty():
                 res.append(i)
         return res
+
+    def remove_empty_wells(self):
+        self.wells = [well for well in self.wells if not well.isempty()]
 
 
 class Row(WellSeries):
@@ -490,6 +520,31 @@ class Column(WellSeries):
             self.wells.extend(wells)
         self.sort_wells()
 
+    def match_sample_pipetting_groups(self, pipetting_groups):
+        for pg in pipetting_groups:
+            if pg == self:
+                self.sample_pipetting_groups.append(pg)
+                return
+
+        # Get all combinations of pipetting_groups whose len is equal to len of column
+        combinations = [seq for i in range(len(pipetting_groups), 0, -1) for seq in itertools.permutations(pipetting_groups, i) if sum(len(x) for x in seq) == len(self)]
+
+        # For each combination of PipettingGroups, if combo is equal to column,
+        # set that combo as column.pipetting_groups
+        for combo in combinations:
+            comp_group = combo[0]
+            for pg in combo[1:]:
+                comp_group += pg
+            if comp_group == self:
+                self.sample_pipetting_groups.extend(combo)
+                return
+
 
 if __name__ == '__main__':
     p = Plate('test_plate4.csv', format='96')
+    print(p)
+    for pg in p.unique_pipetting_groups:
+        print(pg)
+    print('\n')
+    for col in p.columns():
+        print(col.sample_pipetting_groups)
