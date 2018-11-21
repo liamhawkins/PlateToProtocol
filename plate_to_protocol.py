@@ -155,6 +155,16 @@ class Plate:
                              target_name=target_name,
                              starting_quantity=starting_quantity)
 
+    def _clean_plate(self):
+        self._rows = [row for row in self._rows if not row.isempty()]
+        self._columns = [col for col in self._columns if not col.isempty()]
+
+        for row in self._rows:
+            row.remove_empty_wells()
+
+        for col in self._columns:
+            col.remove_empty_wells()
+
     def update_well(self, row, col, sample_type=None, replicate_num=None, target_name=None, sample_name=None, starting_quantity=None):
         for well in self.wells:
             if well.row == row and well.column == col:
@@ -274,16 +284,6 @@ class Plate:
         for col in self.columns():
             col.match_sample_pipetting_groups(self.unique_pipetting_groups)
 
-    def _clean_plate(self):
-        self._rows = [row for row in self._rows if not row.isempty()]
-        self._columns = [col for col in self._columns if not col.isempty()]
-
-        for row in self._rows:
-            row.remove_empty_wells()
-
-        for col in self._columns:
-            col.remove_empty_wells()
-
 
 class Well:
     def __init__(self, row, column, sample_type=None, replicate_num=None, target_name=None, sample_name=None, starting_quantity=None):
@@ -361,10 +361,10 @@ class PipettingGroup:
             raise TypeError("{} is not a PipettingGroup or WellSeries".format(type(other)))
 
     def __str__(self):
-        s = '{}:'.format(self.__class__.__name__)
+        s = '{}('.format(self.__class__.__name__)
         for r in self.samples:
             s += str(r) + ', '
-        return s[:-2]
+        return s[:-2] + ')'
 
     def __repr__(self):
         sample_str = ''
@@ -543,8 +543,9 @@ class Column(WellSeries):
 if __name__ == '__main__':
     p = Plate('test_plate4.csv', format='96')
     print(p)
-    for pg in p.unique_pipetting_groups:
-        print(pg)
-    print('\n')
+
+    step = 1
     for col in p.columns():
-        print(col.sample_pipetting_groups)
+        for pg in col.sample_pipetting_groups:
+            print('STEP {}: Col: {} - {}'.format(step, col.label, pg))
+            step +=1
