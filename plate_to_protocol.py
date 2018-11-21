@@ -31,7 +31,7 @@ class Plate:
         self.samples = self._get_samples()
         self.targets = self._get_targets()
 
-        self.unique_pipetting_groups = self._get_unique_pipetting_groups()
+        self.pipetting_groups = self._get_pipetting_groups()
 
         self._assign_pipette_group_relations()
 
@@ -190,7 +190,7 @@ class Plate:
                 res.append(well.target_name)
         return res
 
-    def _get_unique_pipetting_groups(self):
+    def _get_pipetting_groups(self):
         res = []
         sample_group_dict = OrderedDict()
         for col in self.columns():
@@ -284,10 +284,10 @@ class Plate:
 
     def _assign_pipetting_groups_to_columns(self):
         for col in self.columns():
-            col.match_sample_pipetting_groups(self.unique_pipetting_groups)
+            col.match_sample_pipetting_groups(self.pipetting_groups)
 
     def _assign_pipette_group_relations(self):
-        for group, comparator_group in [(g1, g2) for g1 in self.unique_pipetting_groups for g2 in self.unique_pipetting_groups if g1 != g2]:
+        for group, comparator_group in [(g1, g2) for g1 in self.pipetting_groups for g2 in self.pipetting_groups if g1 != g2]:
             if comparator_group in group:
                 group.add_sub_group(comparator_group)
                 comparator_group.add_parent_group(group)
@@ -572,7 +572,7 @@ if __name__ == '__main__':
     p = Plate('test_plate4.csv', format='96')
     print(p)
 
-    for g in p.unique_pipetting_groups:
+    for g in p.pipetting_groups:
         if not g.has_parents():
             print(g)
 
