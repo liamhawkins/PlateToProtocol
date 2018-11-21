@@ -6,6 +6,10 @@ class PlateFormatError(Exception):
     pass
 
 
+class PlateLayoutError(Exception):
+    pass
+
+
 class Plate:
     def __init__(self, plate_file, format):
         # Make sure plate is set to 96 or 384 well format
@@ -156,6 +160,10 @@ class Plate:
                              replicate_num=replicate_num,
                              target_name=target_name,
                              starting_quantity=starting_quantity)
+
+        for col in self.columns():
+            if col.has_empty_well_in_middle():
+                raise PlateLayoutError('Cannot have empty wells in middle of column')
 
     def _clean_plate(self):
         self._rows = [row for row in self._rows if not row.isempty()]
@@ -501,6 +509,21 @@ class WellSeries:
 
     def remove_empty_wells(self):
         self.wells = [well for well in self.wells if not well.isempty()]
+
+    def has_empty_well_in_middle(self):
+        empty_index = [index for (index, well) in enumerate(self.wells) if well.isempty()]
+        full_index = [index for (index, well) in enumerate(self.wells) if not well.isempty()]
+
+        try:
+            min_full = min(full_index)
+            max_full = max(full_index)
+        except ValueError:
+            return False
+
+        if any([index in list(range(min_full, max_full+1)) for index in empty_index]):
+            return True
+        else:
+            return False
 
 
 class Row(WellSeries):
