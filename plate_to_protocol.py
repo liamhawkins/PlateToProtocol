@@ -33,6 +33,8 @@ class Plate:
 
         self.unique_pipetting_groups = self._get_unique_pipetting_groups()
 
+        self._assign_pipette_group_relations()
+
         self._assign_pipetting_groups_to_columns()
 
     def __str__(self):
@@ -273,9 +275,9 @@ class Plate:
         return True
 
     def _is_distinct(self, group1, group2):
-        wells1 = set(group1)
-        wells2 = set(group2)
-        if len(wells1.intersection(wells2)) == 0:
+        samples1 = set(group1.samples)
+        samples2 = set(group2.samples)
+        if len(samples1.intersection(samples2)) == 0:
             return True
         else:
             return False
@@ -283,6 +285,12 @@ class Plate:
     def _assign_pipetting_groups_to_columns(self):
         for col in self.columns():
             col.match_sample_pipetting_groups(self.unique_pipetting_groups)
+
+    def _assign_pipette_group_relations(self):
+        for group, comparator_group in [(g1, g2) for g1 in self.unique_pipetting_groups for g2 in self.unique_pipetting_groups if g1 != g2]:
+            if comparator_group in group:
+                group.add_sub_group(comparator_group)
+                comparator_group.add_parent_group(group)
 
 
 class Well:
@@ -348,6 +356,9 @@ class PipettingGroup:
             self.samples = samples
         if all(isinstance(r, Well) for r in samples):
             self.samples = [Sample(r.sample_name, r.starting_quantity) for r in samples]
+
+        self.sub_groups = []
+        self.parent_groups = []
         self.index = 0
 
     def __eq__(self, other):
@@ -357,8 +368,10 @@ class PipettingGroup:
             return all([x == y for x, y in zip(self.samples, other.samples)])
         elif isinstance(other, WellSeries):
             return all([x == y for x, y in zip(self.samples, other.wells)])
+        elif all([isinstance(item, (Well, Sample)) for item in other]):
+            return all([x == y for x, y in zip(self.samples, other)])
         else:
-            raise TypeError("{} is not a PipettingGroup or WellSeries".format(type(other)))
+            raise TypeError("{} is not a PipettingGroup or WellSeries or list of Wells or Samples".format(type(other)))
 
     def __str__(self):
         s = '{}('.format(self.__class__.__name__)
@@ -408,6 +421,21 @@ class PipettingGroup:
 
     def __add__(self, other):
         return PipettingGroup(self.samples + other.samples)
+
+    def add_sub_group(self, group):
+        if not isinstance(group, PipettingGroup):
+            raise TypeError('Subgroup must be class {}'.format(self.__class__.__name__))
+        else:
+            self.sub_groups.append(group)
+
+    def add_parent_group(self, group):
+        if not isinstance(group, PipettingGroup):
+            raise TypeError('Subgroup must be class {}'.format(self.__class__.__name__))
+        else:
+            self.parent_groups.append(group)
+
+    def has_parents(self):
+        return len(self.parent_groups) > 0
 
 
 class WellSeries:
@@ -544,8 +572,14 @@ if __name__ == '__main__':
     p = Plate('test_plate4.csv', format='96')
     print(p)
 
+    for g in p.unique_pipetting_groups:
+        if not g.has_parents():
+            print(g)
+
+    print('')
+
     step = 1
     for col in p.columns():
         for pg in col.sample_pipetting_groups:
             print('STEP {}: Col: {} - {}'.format(step, col.label, pg))
-            step +=1
+            step += 1
