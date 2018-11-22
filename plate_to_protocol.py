@@ -1,5 +1,6 @@
 import itertools
 from collections import OrderedDict
+from opentrons import labware
 
 
 class PlateFormatError(Exception):
@@ -13,7 +14,7 @@ class PlateLayoutError(Exception):
 class Plate:
     def __init__(self, plate_file, format):
         # Make sure plate is set to 96 or 384 well format
-        if format not in ['96', '384']:
+        if format not in ['96-flat', '384-plate']:
             raise ValueError('Format must be "96" or "384"')
 
         self.plate_file = plate_file
@@ -22,6 +23,9 @@ class Plate:
         self.wells = []
         self._rows = []
         self._columns = []
+        if format == '96-flat':
+            self.pcr_plate = labware.load(format, '1')
+        self.pipetting_steps = []
 
         # Make placeholder wells for specified format
         self._make_plate()
@@ -40,6 +44,12 @@ class Plate:
         self._assign_pipette_group_relations()
 
         self._assign_pipetting_groups_to_columns()
+
+        self.sample_plate = SamplePlate(self.pipetting_groups)
+
+        self._make_pipetting_steps()
+
+
 
     def __str__(self):
         r = ''
@@ -79,13 +89,13 @@ class Plate:
         return res
 
     def _make_plate(self):
-        if self.format == '96':
+        if self.format == '96-flat':
             self.row_labels = list('ABCDEFGH')
             self.col_labels = list(range(1, 12 + 1))
             self.num_rows = 8
             self.num_cols = 12
             self.total_vol = 20.0
-        elif self.format == '384':
+        elif self.format == '384-plate':
             self.row_labels = list('ABCDEFGHIJKLMNOP')
             self.col_labels = list(range(1, 24 + 1))
             self.num_rows = 16
@@ -300,6 +310,17 @@ class Plate:
                 group.add_sub_group(comparator_group)
                 comparator_group.add_parent_group(group)
 
+    def _make_pipetting_steps(self):
+        for col in self.columns():
+            row = ord(col.wells[0].row)
+            for pg in col.sample_pipetting_groups:
+                new_group = PipettingGroup(pg.samples)
+                new_group.source = self.sample_plate.location(pg)
+                new_group.dest = self.pcr_plate.wells('{}{}'.format(chr(row), col.label))
+                new_group.num_tips = len(pg)
+                self.pipetting_steps.append(new_group)
+                row += len(pg)
+
 
 class Well:
     def __init__(self, row, column, sample_type=None, replicate_num=None, target_name=None, sample_name=None, starting_quantity=None):
@@ -367,6 +388,9 @@ class PipettingGroup:
 
         self.sub_groups = []
         self.parent_groups = []
+        self.num_tips = len(self.samples)
+        self.source = None
+        self.dest = None
         self.index = 0
 
     def __eq__(self, other):
@@ -591,18 +615,74 @@ class Column(WellSeries):
                 return
 
 
+class SamplePlate:
+    def __init__(self, pipetting_groups, plate='96-flat'):
+        if plate != '96-flat':
+            raise NotImplementedError('Only 96-flat is implemented')
+
+        self.pipetting_groups = pipetting_groups
+        self.plate = labware.load(plate, '2')
+        self.pipetting_group_loc = self._assign_pipetting_group_loc()
+
+    def __str__(self):
+        max_len = max([len(str(sample)) for pg in self.pipetting_group_loc.keys() for sample in pg])
+        s = ''
+        col = 1
+        for _ in [pg for pg in self.pipetting_group_loc if not pg.has_parents()]:
+            s += ('  ' + str(col)).ljust(max_len + 1)
+            col += 1
+        s += '\n'
+        row = ord('A')
+        for i in range(8):
+            s += chr(row + i) + ' '
+            for pg in self.pipetting_group_loc.keys():
+                if not pg.has_parents():
+                    try:
+                        s += str(pg[i]).ljust(max_len + 1)
+                    except IndexError:
+                        s += ' '*(max_len + 1)
+                        pass
+            s += '\n'
+        return s
+
+    def _assign_pipetting_group_loc(self):
+        pipetting_group_loc = {}
+        for pg, col in zip(self.pipetting_groups, ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']):
+            if not pg.has_parents():
+                pipetting_group_loc[pg] = self.plate.wells('A{}'.format(col))
+
+        for pg in self.pipetting_groups:
+            if pg.has_parents():
+                parent_group = pg.parent_groups[0]
+                parent_well_label = str(pipetting_group_loc[parent_group]).replace('<Well ', '').replace('>', '')
+                parent_well_row = parent_well_label[0]
+                parent_well_col = parent_well_label[1:]
+                pg_first_sample = pg[0]
+
+                for index, sample in enumerate(parent_group):
+                    if pg_first_sample == sample:
+                        pg_row = chr(ord(parent_well_row) + index)
+                        pg_col = parent_well_col
+
+
+                pipetting_group_loc[pg] = self.plate.wells('{}{}'.format(pg_row, pg_col))
+
+        return pipetting_group_loc
+
+    def location(self, pipetting_group):
+        return self.pipetting_group_loc[pipetting_group]
+
+
+
 if __name__ == '__main__':
-    p = Plate('test_plate4.csv', format='96')
+    p = Plate('test_plate4.csv', format='96-flat')
+
+    print("PLATE")
     print(p)
 
-    for g in p.pipetting_groups:
-        if not g.has_parents():
-            print(g)
+    print('SAMPLE PLATE')
+    print(p.sample_plate)
 
-    print('')
-
-    step = 1
-    for col in p.columns():
-        for pg in col.sample_pipetting_groups:
-            print('STEP {}: Col: {} - {}'.format(step, col.label, pg))
-            step += 1
+    print('\nPIPETTING STEPS')
+    for ps in p.pipetting_steps:
+        print('FROM Sample-Plate: {} TO pcr-plate: {} = {}'.format(ps.source, ps.dest, ps))
