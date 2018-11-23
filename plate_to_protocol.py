@@ -260,6 +260,14 @@ class Plate:
         if longest_indexes[1] != len(group)-1:
             partition_list.append(PipettingGroup(group[longest_indexes[1]+1:len(group)]))
 
+        repartition_list = []
+        for group in partition_list:
+            if all([group not in distinct_group for distinct_group in distinct_groups]):
+                repartition_list.append(group)
+        for group in repartition_list:
+            partition_list.remove(group)
+            partition_list.extend(self._get_partitions(group, distinct_groups))
+
         return partition_list
 
     def _get_distinct_and_non_distinct_groups(self, sample_group_dict):
