@@ -626,28 +626,26 @@ class SamplePlate:
         max_len = max([len(str(sample)) for pg in self.pipetting_group_loc.keys() for sample in pg])
         s = ''
         col = 1
-        for _ in [pg for pg in self.pipetting_group_loc if not pg.has_parents()]:
+        for _ in self.unique_pipetting_groups():
             s += ('  ' + str(col)).ljust(max_len + 1)
             col += 1
         s += '\n'
         row = ord('A')
         for i in range(8):
             s += chr(row + i) + ' '
-            for pg in self.pipetting_group_loc.keys():
-                if not pg.has_parents():
-                    try:
-                        s += str(pg[i]).ljust(max_len + 1)
-                    except IndexError:
-                        s += ' '*(max_len + 1)
-                        pass
+            for pg in self.unique_pipetting_groups():
+                try:
+                    s += str(pg[i]).ljust(max_len + 1)
+                except IndexError:
+                    s += ' '*(max_len + 1)
+                    pass
             s += '\n'
         return s
 
     def _assign_pipetting_group_loc(self):
         pipetting_group_loc = {}
-        for pg, col in zip(self.pipetting_groups, ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']):
-            if not pg.has_parents():
-                pipetting_group_loc[pg] = self.plate.wells('A{}'.format(col))
+        for pg, col in zip(self.unique_pipetting_groups(), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']):
+            pipetting_group_loc[pg] = self.plate.wells('A{}'.format(col))
 
         for pg in self.pipetting_groups:
             if pg.has_parents():
@@ -669,6 +667,9 @@ class SamplePlate:
 
     def location(self, pipetting_group):
         return self.pipetting_group_loc[pipetting_group]
+
+    def unique_pipetting_groups(self):
+        return [group for group in self.pipetting_groups if not group.has_parents()]
 
 
 
