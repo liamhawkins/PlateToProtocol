@@ -23,6 +23,8 @@ class Plate:
         self.plate_file_list = []
         self.wells = []
         self._rows = []
+        self.num_rows = None
+        self.num_cols = None
         self._columns = []
         self.pipetting_steps = []
 
@@ -57,6 +59,9 @@ class Plate:
         return r
 
     def rows(self, *args):
+        """
+        Helper method to access rows of plate by label or index/slice
+        """
         row_dict = OrderedDict([(r_label, row) for r_label, row in zip(self.row_labels, self._rows)])
         keys = list(row_dict.keys())
 
@@ -72,6 +77,9 @@ class Plate:
         return res
 
     def columns(self, *args):
+        """
+        Helper method to access columns of plate by label or index/slice
+        """
         col_dict = OrderedDict([(str(c_label), col) for c_label, col in zip(self.col_labels, self._columns)])
         keys = list(col_dict.keys())
 
@@ -87,30 +95,47 @@ class Plate:
             res = res[0]
         return res
 
+    def num_wells(self):
+        return len(self.wells)
+
     def _make_plate(self):
-        if self.format == '96-flat':
+        """
+        Create empty placeholder wells, columns, and rows
+        """
+        if self.format in ['96-flat', 'opentrons-aluminum-block-96-PCR-plate']:
             self.row_labels = list('ABCDEFGH')
             self.col_labels = list(range(1, 12 + 1))
-            self.num_rows = 8
-            self.num_cols = 12
-            self.total_vol = 20.0
+            self.well_vol = 20.0
+        else:
+            raise NotImplementedError('Format must be "96-flat" or "opentrons-aluminum-block-96-PCR-plate"')
 
+        self.num_rows = len(self.row_labels)
+        self.num_cols = len(self.col_labels)
+
+        # Create wells
         for row in self.row_labels:
             for col in self.col_labels:
                 self.wells.append(Well(row=row, column=col))
         self.wells = sorted(self.wells, key=lambda x: (x.row, x.column))
 
+        # Populate rows
         for row_label in self.row_labels:
             row_list = [well for well in self.wells if well.row == row_label]
             self._rows.append(Row(row_list))
+            # Sort rows on label (A->Z)
             self._rows = sorted(self._rows, key=lambda x: x.label)
 
+        # Populate columns
         for col_label in self.col_labels:
             col_list = [well for well in self.wells if well.column == col_label]
             self._columns.append(Column(col_list))
+            # Sort columns on label (1->...)
             self._columns = sorted(self._columns, key=lambda x: x.label)
 
     def _fill_plate(self):
+        """
+        Read plate_file and fill in wells with information from file
+        """
         # Read in plate file
         with open(self.plate_file, 'r') as f:
             for line in f.read().splitlines():
@@ -151,11 +176,13 @@ class Plate:
             except (TypeError, ValueError):
                 starting_quantity = None
 
+            # Infer plate format and raise error if plate_file format does not make self.format
             if row not in self.row_labels:
                 raise PlateFormatError('Row: {} does not match plate format {}'.format(row, self.format))
             if col not in self.col_labels:
                 raise PlateFormatError('Column: {} does not match plate format {}'.format(col, self.format))
 
+            # Update well with corresponding information from plate_file
             self.update_well(row=row,
                              col=col,
                              sample_name=sample_name,
@@ -164,11 +191,16 @@ class Plate:
                              target_name=target_name,
                              starting_quantity=starting_quantity)
 
+        # Check each column to make sure there are not empty wells in the middle of a column.
+        # Much harder to support this
         for col in self.columns():
             if col.has_empty_well_in_middle():
                 raise PlateLayoutError('Cannot have empty wells in middle of column')
 
     def _clean_plate(self):
+        """
+        Remove rows, columns, and wells that are empty
+        """
         self._rows = [row for row in self._rows if not row.isempty()]
         self._columns = [col for col in self._columns if not col.isempty()]
 
@@ -179,6 +211,9 @@ class Plate:
             col.remove_empty_wells()
 
     def update_well(self, row, col, sample_type=None, replicate_num=None, target_name=None, sample_name=None, starting_quantity=None):
+        """
+        Update information for well corresponding to 'row' and 'col'
+        """
         for well in self.wells:
             if well.row == row and well.column == col:
                 well.sample_type = sample_type
@@ -188,39 +223,49 @@ class Plate:
                 well.starting_quantity = starting_quantity
 
     def _get_samples(self):
-        res = []
-        for well in self.wells:
-            if (well.sample_name, well.starting_quantity, well.sample_type) not in res:
-                res.append((well.sample_name, well.starting_quantity, well.sample_type))
-        return res
+        """
+        Extract list of samples from wells
+        """
+        return [Sample(well.sample_name, well.starting_quantity) for well in self.wells]
 
     def _get_targets(self):
-        res = []
-        for well in self.wells:
-            if well.target_name not in res:
-                res.append(well.target_name)
-        return res
+        """
+        Extract list of targets from wells
+        """
+        return [well.target_name for well in self.wells]
 
     def _get_pipetting_groups(self):
+        """
+        Creates and returns pipetting groups from non-empty columns. A pipetting group is a series of samples that will
+        be pipetted together with the multichannel pipette.
+        """
         res = []
         sample_group_dict = OrderedDict()
+
+        # For each non-empty column, create a PipettingGroup containing all non-emtpy wells in that column and add it
+        # to or increment its value in sample_group_dict
         for col in self.columns():
             if col.isempty():
                 continue
-            first_non_empty = min(col.non_empty_indexes())
-            last_non_empty = max(col.non_empty_indexes())
-
-            new_group = PipettingGroup(col[first_non_empty:last_non_empty+1])
-
+            first_non_empty_well = min(col.non_empty_indexes())
+            last_non_empty_well = max(col.non_empty_indexes())
+            new_group = PipettingGroup(col[first_non_empty_well:last_non_empty_well+1])
             if new_group not in sample_group_dict:
                 sample_group_dict[new_group] = 1
             else:
                 sample_group_dict[new_group] += 1
 
+        # Determine which groups are distinct or non-distinct. A distinct group is a PipettingGroup that has no samples
+        # in common with any other distinct group. A non-distinct group is a PipettingGroup that is not equal by has at
+        # least one sample in common with one of the distinct groups
         distinct_groups, non_distinct_groups = self._get_distinct_and_non_distinct_groups(sample_group_dict)
 
+        # Add distinct groups to return list
         res.extend(distinct_groups)
 
+        # Partition each non-distinct group into new PipettingGroups that are each a subset of one of the
+        # distinct_groups. For example if there is a distinct groups containing samples: [1,2,3,4,5,6] and a
+        # non-distinct group containing samples: [4,5,6,1,2,3] it would be partitioned into [4,5,6] and [1,2,3]
         for group in non_distinct_groups:
             partitions = self._get_partitions(group, distinct_groups)
             for p in partitions:
@@ -230,17 +275,21 @@ class Plate:
         return res
 
     def _get_partitions(self, group, distinct_groups):
+        """
+        Partition group into PipettingGroups that are subsets of at least one PipettingGroup in distinct_groups
+        """
         partition_list = []
 
-        # If group is most_common_group return empty list
+        # If group is in distinct_groups return empty list
         if group in distinct_groups:
             return partition_list
 
-        # If group is completely distinct from most_common_group return whole group
+        # If group is distinct from all groups in in distinct_groups add to partition_list and return
         if all(sample not in distinct_group for sample in group for distinct_group in distinct_groups):
             partition_list.append(group)
             return partition_list
 
+        # Scan group for longest subset of samples that are in one of the distinct groups
         longest_len = 0
         for first_sample in range(len(group)):
             for last_sample in reversed(range(len(group))):
@@ -251,12 +300,20 @@ class Plate:
                         longest_group = candidate_group
                         longest_indexes = (first_sample, last_sample)
 
+        # If partition is not at the beginning of the column, add first sample in column to sample before identified
+        # partitions as a new PipettingGroup to partition_list. If this is not a valid PipettingGroup it will be
+        # repartitioned below
         if longest_indexes[0] != 0:
             partition_list.append(PipettingGroup(group[0:longest_indexes[0]]))
+        # Add identified longest subgroup of samples to partition_list as new PipettingGroup
         partition_list.append(PipettingGroup(longest_group))
+        # If identified longest subgroup does not extend to the end of the column, create a new PipettingGroup from
+        # remaining samples in the column. If this is not a valid PipettingGroup it will be repartitioned below
         if longest_indexes[1] != len(group)-1:
             partition_list.append(PipettingGroup(group[longest_indexes[1]+1:len(group)]))
 
+        # Scan partition list for invalid PipetteGroups (i.e. a group that is not a subset of one of the
+        # distinct_groups) and recursively partition
         repartition_list = []
         for group in partition_list:
             if all([group not in distinct_group for distinct_group in distinct_groups]):
@@ -268,11 +325,22 @@ class Plate:
         return partition_list
 
     def _get_distinct_and_non_distinct_groups(self, sample_group_dict):
+        """
+        Takes dict keyed by sample group, with values of how often that groups occurs in the plate file
+        and returns distinct and non-distinct groups. A distinct group is a group that does not have any samples
+        in common with the other distinct groups, while a non-distinct group has at least one sample in common with
+        one of the distinct groups.
+        """
         distinct_groups = []
         non_distinct_groups = []
 
+        # Sort sample_group_dict first by length of the group, then if more than one are longest sort by how
+        # many times they occur on the plate
         longest_to_shortest_groups = sorted(sample_group_dict, key=lambda x: (len(x), sample_group_dict[x]))
 
+        # First group is 'distinct' by definition, no other groups have been added so there is nothing
+        # for it to be non-distinct from. Subsequent groups are added to distinct_groups if they have no wells
+        # in common with any group in distinct_groups, otherwise they are added to non_distinct_groups
         distinct_groups.append(longest_to_shortest_groups[0])
         for group in longest_to_shortest_groups:
             if self._is_distinct_from_groups(group, distinct_groups):
@@ -285,12 +353,18 @@ class Plate:
         return distinct_groups, non_distinct_groups
 
     def _is_distinct_from_groups(self, group, list_of_groups):
+        """
+        Check if group is distinct (no samples in common) with all groups in list_of_groups
+        """
         for comparator_group in list_of_groups:
             if not self._is_distinct(group, comparator_group):
                 return False
         return True
 
     def _is_distinct(self, group1, group2):
+        """
+        Check if group1 is distinct (no samples in common) from group2
+        """
         samples1 = set(group1.samples)
         samples2 = set(group2.samples)
         if len(samples1.intersection(samples2)) == 0:
@@ -298,17 +372,26 @@ class Plate:
         else:
             return False
 
-    def _assign_pipetting_groups_to_columns(self):
-        for col in self.columns():
-            col.match_sample_pipetting_groups(self.pipetting_groups)
-
     def _assign_pipette_group_relations(self):
+        """
+        For each PipettingGroup, assign sub- and parent-groups
+        """
         for group, comparator_group in [(g1, g2) for g1 in self.pipetting_groups for g2 in self.pipetting_groups if g1 != g2]:
             if comparator_group in group:
                 group.add_sub_group(comparator_group)
                 comparator_group.add_parent_group(group)
 
+    def _assign_pipetting_groups_to_columns(self):
+        """
+        Pass pipetting_groups to each col so they can extract their respective PipettingGroups
+        """
+        for col in self.columns():
+            col.match_sample_pipetting_groups(self.pipetting_groups)
+
     def _make_pipetting_steps(self):
+        """
+        Iterate over columns and create new PipettingGroup objects with source and destination wells
+        """
         for col in self.columns():
             row = ord(col.wells[0].row)
             for pg in col.sample_pipetting_groups:
