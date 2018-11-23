@@ -14,17 +14,16 @@ class PlateLayoutError(Exception):
 class Plate:
     def __init__(self, plate_file, format):
         # Make sure plate is set to 96 or 384 well format
-        if format not in ['96-flat', '384-plate']:
-            raise ValueError('Format must be "96" or "384"')
+        if format not in ['96-flat', 'opentrons-aluminum-block-96-PCR-plate']:
+            raise ValueError('Format must be "96-flat" or "opentrons-aluminum-block-96-PCR-plate"')
 
         self.plate_file = plate_file
         self.format = format
+        self.pcr_plate = labware.load(format, '1')
         self.plate_file_list = []
         self.wells = []
         self._rows = []
         self._columns = []
-        if format == '96-flat':
-            self.pcr_plate = labware.load(format, '1')
         self.pipetting_steps = []
 
         # Make placeholder wells for specified format
@@ -95,12 +94,6 @@ class Plate:
             self.num_rows = 8
             self.num_cols = 12
             self.total_vol = 20.0
-        elif self.format == '384-plate':
-            self.row_labels = list('ABCDEFGHIJKLMNOP')
-            self.col_labels = list(range(1, 24 + 1))
-            self.num_rows = 16
-            self.num_cols = 24
-            self.total_vol = 10.0
 
         for row in self.row_labels:
             for col in self.col_labels:
