@@ -229,9 +229,6 @@ class Plate:
 
         return res
 
-    def _get_most_common_groups(self, sample_group_dict):
-        return [group for (group, num) in sample_group_dict.items() if num == max(sample_group_dict.values())]
-
     def _get_partitions(self, group, distinct_groups):
         partition_list = []
 
