@@ -11,7 +11,7 @@ class PlateLayoutError(Exception):
     pass
 
 
-class Plate:
+class PlateParser:
     def __init__(self, plate_file, format):
         # Make sure plate is set to 96 or 384 well format
         if format not in ['96-flat', 'opentrons-aluminum-block-96-PCR-plate']:
@@ -698,8 +698,8 @@ class Column(WellSeries):
 
 class SamplePlate:
     def __init__(self, pipetting_groups, plate='96-flat'):
-        if plate != '96-flat':
-            raise NotImplementedError('Only 96-flat is implemented')
+        if plate not in ['96-flat', 'opentrons-aluminum-block-96-PCR-plate']:
+            raise NotImplementedError('Only "96-flat" and "opentrons-aluminum-block-96-PCR-plate" are implemented')
 
         self.pipetting_groups = pipetting_groups
         self.plate = labware.load(plate, '2')
